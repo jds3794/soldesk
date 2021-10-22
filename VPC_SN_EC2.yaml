@@ -1,0 +1,149 @@
+Parameters:
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instances. Linked to AWS Parameter
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+    
+Resources:
+  CloudVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: CloudVPC
+  
+  CloudIGW:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: Cloud-IGW
+          
+  CloudIGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref CloudIGW
+      VpcId: !Ref CloudVPC
+      
+  CloudPublicSN:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref CloudVPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.0.0.0/24
+      Tags:
+        - Key: Name
+          Value: Cloud-Public-SN
+          
+  CloudPrivateSN:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref CloudVPC
+      AvailabilityZone: !Select [ 2, !GetAZs '' ]
+      CidrBlock: 10.0.1.0/24
+      Tags:
+        - Key: Name
+          Value: Cloud-Private-SN
+          
+  CloudPublicRT:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref CloudVPC
+      Tags:
+        - Key: Name
+          Value: Cloud-Public-RT
+          
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: CloudIGWAttachment
+    Properties:
+      RouteTableId: !Ref CloudPublicRT
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref CloudIGW
+    
+  CloudPrivateRT:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref CloudVPC
+      Tags:
+        - Key: Name
+          Value: Cloud-Private-RT
+
+  CloudPublicSNRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref CloudPublicRT
+      SubnetId: !Ref CloudPublicSN 
+
+  CloudPrivateSNRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref CloudPrivateRT
+      SubnetId: !Ref CloudPrivateSN  
+
+  CloudSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP access via port 80 and SSH access via port 22
+      VpcId: !Ref CloudVPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '80'
+        ToPort: '80'
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: '22'
+        ToPort: '22'
+        CidrIp: 0.0.0.0/0     
+
+  CloudPublicEC2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-03b42693dc6a7dc35
+      InstanceType: t2.micro
+      KeyName: !Ref KeyName
+      Tags:
+        - Key: Name
+          Value: Cloud-Public-EC2
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          SubnetId: !Ref CloudPublicSN
+          GroupSet:
+            - !Ref CloudSecurityGroup
+          AssociatePublicIpAddress: true
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+            yum install httpd -y
+            systemctl start httpd
+            echo "<h1>Test Web Server</h1>" > /var/www/html/index.html        
+        
+  CloudPrivateEC2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-03b42693dc6a7dc35
+      InstanceType: t2.micro
+      KeyName: !Ref KeyName
+      Tags:
+        - Key: Name
+          Value: Cloud-Private-EC2
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          SubnetId: !Ref CloudPrivateSN
+          GroupSet:
+            - !Ref CloudSecurityGroup  
+
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+            (
+            echo "qwe123"
+            echo "qwe123"
+            ) | passwd --stdin root
+            sed -i "s/^PasswordAuthentication no/PasswordAuthentication yes/g" /etc/ssh/sshd_config
+            sed -i "s/^#PermitRootLogin yes/PermitRootLogin yes/g" /etc/ssh/sshd_config
+            service sshd restart            
+        
